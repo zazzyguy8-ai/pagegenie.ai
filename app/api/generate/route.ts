@@ -1,13 +1,12 @@
-import { NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import Stripe from "stripe";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 const STYLE_PROMPTS: Record<string, string> = {
-  minimal: "Clean minimal design: white background, lots of whitespace, black/gray text, subtle borders, Inter or system font, very modern and elegant.",
-  bold: "Bold dark design: near-black background (#0f0f0f), vibrant gradient accent (purple to blue), large bold headlines, high contrast, energetic feel.",
-  pro: "Professional corporate design: navy/dark-blue (#1e3a5f) header and accents, white body, trust-building layout, clean sans-serif, suitable for B2B or services.",
+  minimal: `Design: clean modern minimal. White (#ffffff) background, dark gray (#111) text, indigo (#6366f1) accent color. Lots of whitespace. System font stack. Very elegant.`,
+  bold: `Design: bold energetic. Very dark background (#0d0d0d), white text, bright purple-to-blue gradient (#7c3aed to #2563eb) for buttons and accents. Large typography. High contrast.`,
+  pro: `Design: professional corporate. White background, dark navy (#1e3a5f) header and accents, gray body text. Clean, trustworthy, business-focused.`,
 };
 
 export async function POST(req: Request) {
@@ -16,60 +15,78 @@ export async function POST(req: Request) {
     const { businessName, description, style, sessionId } = body;
 
     if (!businessName || !description) {
-      return NextResponse.json({ error: "businessName and description required" }, { status: 400 });
+      return new Response(JSON.stringify({ error: "Missing fields" }), { status: 400 });
     }
 
     // Verify Stripe payment if sessionId provided
     if (sessionId) {
-      if (!process.env.STRIPE_SECRET_KEY) {
-        return NextResponse.json({ error: "Payment verification unavailable" }, { status: 500 });
-      }
-      const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+      const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
       const session = await stripe.checkout.sessions.retrieve(sessionId);
       if (session.payment_status !== "paid") {
-        return NextResponse.json({ error: "Payment not completed" }, { status: 402 });
+        return new Response(JSON.stringify({ error: "Payment not completed" }), { status: 402 });
       }
     }
 
     const styleGuide = STYLE_PROMPTS[style] ?? STYLE_PROMPTS.minimal;
 
-    const prompt = `You are an expert web designer. Create a complete, beautiful, production-ready single-page website as a single HTML file.
+    const prompt = `You are an expert web designer. Create a complete, beautiful, working single-page website as ONE HTML file.
 
-BUSINESS:
-Name: ${businessName}
-Description: ${description}
+BUSINESS NAME: ${businessName}
+BUSINESS DESCRIPTION: ${description}
+${styleGuide}
 
-DESIGN STYLE: ${styleGuide}
+RULES:
+- Output ONLY the raw HTML. Start immediately with <!DOCTYPE html>. No explanation, no markdown.
+- All CSS must be in a <style> tag in the <head>. No external CSS files.
+- Use Google Fonts via: <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap" rel="stylesheet">
+- Use Inter font everywhere: body { font-family: 'Inter', system-ui, sans-serif; }
+- Sections to include:
+  1. Sticky nav with logo/name + 1 CTA button
+  2. Hero: big headline (based on the business), sub-headline, 2 CTA buttons
+  3. Services/Features: 3 cards in a responsive grid
+  4. About: short paragraph + 3 stats/trust signals
+  5. Contact/CTA section: headline + email input + button
+  6. Footer
+- Fully responsive with media queries for mobile
+- Smooth scroll behavior
+- Hover effects on buttons and cards
+- Write REAL copy based on the business — NO placeholder text, NO Lorem Ipsum
+- All colors must have good contrast — text must always be clearly readable
+- The page must look visually complete and professional when opened in any browser`;
 
-REQUIREMENTS:
-- Single HTML file with everything inline (CSS in <style> tag, no external dependencies except Google Fonts via @import)
-- Modern, professional landing page with these sections:
-  1. Hero: bold headline, sub-headline, primary CTA button
-  2. Features/Services: 3 key offerings in a grid
-  3. About/Trust: short compelling paragraph + 2-3 trust signals (years, clients, etc.)
-  4. Contact/CTA: final call-to-action section
-- Fully responsive (mobile-first with media queries)
-- Smooth scroll, hover effects on buttons/cards
-- Real, specific copy tailored to the business description (not placeholder text)
-- DO NOT use Lorem Ipsum — write real copy based on the business info
-
-Return ONLY the complete HTML starting with <!DOCTYPE html>. No markdown, no explanation.`;
-
-    const message = await anthropic.messages.create({
+    // Stream the response
+    const stream = anthropic.messages.stream({
       model: "claude-sonnet-4-6",
-      max_tokens: 4000,
+      max_tokens: 8192,
       messages: [{ role: "user", content: prompt }],
     });
 
-    const html = message.content[0].type === "text" ? message.content[0].text.trim() : "";
+    const readable = new ReadableStream({
+      async start(controller) {
+        try {
+          for await (const chunk of stream) {
+            if (
+              chunk.type === "content_block_delta" &&
+              chunk.delta.type === "text_delta"
+            ) {
+              controller.enqueue(new TextEncoder().encode(chunk.delta.text));
+            }
+          }
+        } finally {
+          controller.close();
+        }
+      },
+    });
 
-    if (!html.startsWith("<!DOCTYPE") && !html.startsWith("<html")) {
-      return NextResponse.json({ error: "Generation failed — please try again" }, { status: 500 });
-    }
-
-    return NextResponse.json({ html });
+    return new Response(readable, {
+      headers: {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+      },
+    });
   } catch (err) {
     console.error("Generate error:", err);
-    return NextResponse.json({ error: "Generation failed" }, { status: 500 });
+    return new Response(JSON.stringify({ error: "Generation failed" }), { status: 500 });
   }
 }

@@ -16,7 +16,7 @@ export async function POST(req: Request) {
           price_data: {
             currency: "usd",
             product_data: {
-              name: "Buildy — AI Website Generation",
+              name: "PageGenie — AI Website Generation",
               description: `Website for: ${businessName}`,
             },
             unit_amount: 200, // $2.00

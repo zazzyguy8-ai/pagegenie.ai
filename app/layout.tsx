@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Buildy — AI Website Builder",
-  description: "Describe your business. Get a beautiful website in 15 seconds.",
+  title: "PageGenie — AI Website Builder",
+  description: "Type your idea. Get a website in seconds. AI builds a complete site — download it, host it anywhere.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

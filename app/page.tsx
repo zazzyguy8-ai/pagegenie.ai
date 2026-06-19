@@ -2,56 +2,51 @@
 
 import { useState, useEffect, useRef } from "react";
 
+const C = {
+  bg: "#080808",
+  surface: "#111111",
+  surfaceHover: "#161616",
+  border: "rgba(255,255,255,0.07)",
+  borderHover: "rgba(255,255,255,0.14)",
+  text: "#FFFFFF",
+  muted: "rgba(255,255,255,0.38)",
+  muted2: "rgba(255,255,255,0.18)",
+  accent: "#CAFF33",
+  accentDark: "#080808",
+};
+
 const STYLES = [
-  {
-    id: "minimal",
-    name: "Minimal",
-    desc: "Clean & modern",
-    preview: "bg-white border-2",
-    colors: "⬜ White",
-  },
-  {
-    id: "bold",
-    name: "Bold",
-    desc: "Dark & striking",
-    preview: "bg-zinc-900 border-2",
-    colors: "⬛ Dark",
-  },
-  {
-    id: "pro",
-    name: "Pro",
-    desc: "Corporate & trusted",
-    preview: "bg-indigo-900 border-2",
-    colors: "🟦 Navy",
-  },
+  { id: "minimal", label: "Minimal", sub: "White & clean", dot: "#FFFFFF", dotBorder: "rgba(255,255,255,0.3)" },
+  { id: "bold", label: "Bold", sub: "Dark & striking", dot: "#0d0d0d", dotBorder: "rgba(255,255,255,0.2)" },
+  { id: "pro", label: "Pro", sub: "Navy corporate", dot: "#1e3a5f", dotBorder: "rgba(255,255,255,0.2)" },
 ];
 
-const FREE_KEY = "buildy_free_used";
+const FREE_KEY = "pagegenie_free_used";
 
 export default function Home() {
   const [businessName, setBusinessName] = useState("");
   const [description, setDescription] = useState("");
   const [style, setStyle] = useState("minimal");
-  const [loading, setLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isStreaming, setIsStreaming] = useState(false);
   const [html, setHtml] = useState("");
   const [freeUsed, setFreeUsed] = useState(false);
   const [error, setError] = useState("");
-  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const htmlRef = useRef("");
+  const [charCount, setCharCount] = useState(0);
 
   useEffect(() => {
     setFreeUsed(localStorage.getItem(FREE_KEY) === "true");
-
-    // Handle Stripe success redirect
     const params = new URLSearchParams(window.location.search);
     const sessionId = params.get("session_id");
     if (sessionId) {
-      const saved = sessionStorage.getItem("buildy_pending");
+      const saved = sessionStorage.getItem("pagegenie_pending");
       if (saved) {
         const data = JSON.parse(saved) as { businessName: string; description: string; style: string };
         setBusinessName(data.businessName);
         setDescription(data.description);
         setStyle(data.style);
-        sessionStorage.removeItem("buildy_pending");
+        sessionStorage.removeItem("pagegenie_pending");
         generateSite(data.businessName, data.description, data.style, sessionId);
       }
       window.history.replaceState({}, "", "/");
@@ -59,10 +54,25 @@ export default function Home() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Flush accumulated HTML to state every 120ms during streaming
+  useEffect(() => {
+    if (!isStreaming) return;
+    const interval = setInterval(() => {
+      if (htmlRef.current) {
+        setHtml(htmlRef.current);
+        setCharCount(htmlRef.current.length);
+      }
+    }, 120);
+    return () => clearInterval(interval);
+  }, [isStreaming]);
+
   async function generateSite(name: string, desc: string, sty: string, sessionId?: string) {
-    setLoading(true);
+    setIsLoading(true);
+    setIsStreaming(false);
     setError("");
     setHtml("");
+    setCharCount(0);
+    htmlRef.current = "";
 
     try {
       const res = await fetch("/api/generate", {
@@ -71,14 +81,32 @@ export default function Home() {
         body: JSON.stringify({ businessName: name, description: desc, style: sty, sessionId }),
       });
 
-      const data = await res.json() as { html?: string; error?: string };
-
-      if (!res.ok || !data.html) {
+      if (!res.ok) {
+        const data = await res.json() as { error?: string };
         setError(data.error ?? "Generation failed. Try again.");
         return;
       }
 
-      setHtml(data.html);
+      if (!res.body) {
+        setError("No response from server.");
+        return;
+      }
+
+      setIsStreaming(true);
+      setIsLoading(false);
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        htmlRef.current += decoder.decode(value, { stream: true });
+      }
+
+      setHtml(htmlRef.current);
+      setCharCount(htmlRef.current.length);
+
       if (!sessionId) {
         localStorage.setItem(FREE_KEY, "true");
         setFreeUsed(true);
@@ -86,7 +114,8 @@ export default function Home() {
     } catch {
       setError("Something went wrong. Try again.");
     } finally {
-      setLoading(false);
+      setIsLoading(false);
+      setIsStreaming(false);
     }
   }
 
@@ -97,9 +126,8 @@ export default function Home() {
     }
 
     if (freeUsed) {
-      // Redirect to Stripe
-      setLoading(true);
-      sessionStorage.setItem("buildy_pending", JSON.stringify({ businessName, description, style }));
+      setIsLoading(true);
+      sessionStorage.setItem("pagegenie_pending", JSON.stringify({ businessName, description, style }));
       const res = await fetch("/api/checkout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -110,7 +138,7 @@ export default function Home() {
         window.location.href = data.url;
       } else {
         setError("Payment failed to load. Try again.");
-        setLoading(false);
+        setIsLoading(false);
       }
       return;
     }
@@ -128,188 +156,308 @@ export default function Home() {
     URL.revokeObjectURL(url);
   }
 
-  return (
-    <main className="min-h-screen" style={{ background: "var(--background)", color: "var(--foreground)" }}>
-      {/* Header */}
-      <div className="border-b" style={{ borderColor: "var(--border)" }}>
-        <div className="max-w-5xl mx-auto px-6 h-14 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="h-7 w-7 rounded-lg bg-indigo-500 flex items-center justify-center text-white text-sm font-bold">B</div>
-            <span className="font-bold text-lg">Buildy</span>
-          </div>
-          <span className="text-sm" style={{ color: "var(--muted)" }}>
-            AI Website Builder
-          </span>
-        </div>
-      </div>
+  function resetAll() {
+    setHtml("");
+    setError("");
+    setIsStreaming(false);
+    setCharCount(0);
+    htmlRef.current = "";
+  }
 
-      <div className="max-w-5xl mx-auto px-6 py-12">
-        {!html ? (
-          <>
-            {/* Hero */}
-            <div className="text-center mb-12">
-              <h1 className="text-5xl font-bold tracking-tight mb-4">
-                Your website in{" "}
-                <span className="text-indigo-400">15 seconds</span>
+  const showPreview = isStreaming || !!html;
+  const isDone = !isStreaming && !!html;
+
+  return (
+    <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "system-ui, -apple-system, sans-serif" }}>
+
+      {/* ─── HEADER ─── */}
+      <header style={{ borderBottom: `1px solid ${C.border}`, position: "sticky", top: 0, zIndex: 50, background: C.bg }}>
+        <div style={{ maxWidth: 1000, margin: "0 auto", padding: "0 24px", height: 56, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <button onClick={resetAll} style={{ display: "flex", alignItems: "center", gap: 10, background: "none", border: "none", cursor: "pointer", padding: 0 }}>
+            <div style={{ width: 28, height: 28, borderRadius: 8, background: C.accent, display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <span style={{ fontSize: 13, fontWeight: 800, color: C.accentDark }}>G</span>
+            </div>
+            <span style={{ fontWeight: 700, fontSize: 16, color: C.text, letterSpacing: "-0.02em" }}>PageGenie</span>
+          </button>
+          <span style={{ fontSize: 12, color: C.muted, letterSpacing: "0.08em", textTransform: "uppercase" }}>AI Website Builder</span>
+        </div>
+      </header>
+
+      <div style={{ maxWidth: 1000, margin: "0 auto", padding: "0 24px 80px" }}>
+
+        {!showPreview ? (
+          /* ─── FORM STATE ─── */
+          <div style={{ maxWidth: 560, margin: "0 auto" }}>
+
+            {/* Hero copy */}
+            <div style={{ paddingTop: 80, paddingBottom: 48, textAlign: "center" }}>
+              <h1 style={{
+                fontSize: "clamp(44px, 8vw, 72px)",
+                fontWeight: 900,
+                lineHeight: 1.02,
+                letterSpacing: "-0.04em",
+                margin: 0,
+                color: C.text,
+              }}>
+                Type your idea.{" "}
+                <span style={{ color: C.accent }}>Get a website.</span>
               </h1>
-              <p className="text-lg" style={{ color: "var(--muted)" }}>
-                Describe your business. Pick a style. Done.
+              <p style={{ marginTop: 20, fontSize: 17, lineHeight: 1.6, color: C.muted, maxWidth: 400, margin: "20px auto 0" }}>
+                Describe your business. AI builds a complete site. Download it.
               </p>
             </div>
 
-            {/* Form */}
-            <div
-              className="max-w-xl mx-auto rounded-2xl p-8 space-y-6"
-              style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
-            >
+            {/* Form card */}
+            <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 20, padding: 32 }}>
+
               {/* Business name */}
-              <div className="space-y-2">
-                <label className="text-xs font-semibold uppercase tracking-widest" style={{ color: "var(--muted)" }}>
-                  Business / Project Name
+              <div style={{ marginBottom: 20 }}>
+                <label style={{ display: "block", fontSize: 11, fontWeight: 600, letterSpacing: "0.1em", textTransform: "uppercase", color: C.muted, marginBottom: 10 }}>
+                  Business Name
                 </label>
                 <input
                   type="text"
                   placeholder="e.g. Leo's Barber Shop"
                   value={businessName}
                   onChange={(e) => setBusinessName(e.target.value)}
-                  className="w-full rounded-xl px-4 py-3 text-sm outline-none transition"
-                  style={{ background: "var(--background)", border: "1px solid var(--border)", color: "var(--foreground)" }}
+                  style={{
+                    width: "100%",
+                    background: C.bg,
+                    border: `1px solid ${C.border}`,
+                    borderRadius: 12,
+                    padding: "14px 16px",
+                    fontSize: 15,
+                    color: C.text,
+                    outline: "none",
+                    boxSizing: "border-box",
+                    transition: "border-color 150ms",
+                  }}
+                  onFocus={(e) => e.target.style.borderColor = C.borderHover}
+                  onBlur={(e) => e.target.style.borderColor = C.border}
                 />
               </div>
 
               {/* Description */}
-              <div className="space-y-2">
-                <label className="text-xs font-semibold uppercase tracking-widest" style={{ color: "var(--muted)" }}>
-                  What do you do? (2-3 sentences)
+              <div style={{ marginBottom: 24 }}>
+                <label style={{ display: "block", fontSize: 11, fontWeight: 600, letterSpacing: "0.1em", textTransform: "uppercase", color: C.muted, marginBottom: 10 }}>
+                  What do you do?
                 </label>
                 <textarea
                   placeholder="We offer premium haircuts and beard grooming for men in Bratislava. Walk-ins welcome, online booking available."
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
                   rows={3}
-                  className="w-full rounded-xl px-4 py-3 text-sm outline-none resize-none transition"
-                  style={{ background: "var(--background)", border: "1px solid var(--border)", color: "var(--foreground)" }}
+                  style={{
+                    width: "100%",
+                    background: C.bg,
+                    border: `1px solid ${C.border}`,
+                    borderRadius: 12,
+                    padding: "14px 16px",
+                    fontSize: 15,
+                    color: C.text,
+                    outline: "none",
+                    resize: "none",
+                    boxSizing: "border-box",
+                    fontFamily: "inherit",
+                    lineHeight: 1.6,
+                    transition: "border-color 150ms",
+                  }}
+                  onFocus={(e) => e.target.style.borderColor = C.borderHover}
+                  onBlur={(e) => e.target.style.borderColor = C.border}
                 />
               </div>
 
               {/* Style picker */}
-              <div className="space-y-2">
-                <label className="text-xs font-semibold uppercase tracking-widest" style={{ color: "var(--muted)" }}>
-                  Style
+              <div style={{ marginBottom: 28 }}>
+                <label style={{ display: "block", fontSize: 11, fontWeight: 600, letterSpacing: "0.1em", textTransform: "uppercase", color: C.muted, marginBottom: 10 }}>
+                  Design Style
                 </label>
-                <div className="grid grid-cols-3 gap-3">
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
                   {STYLES.map((s) => (
                     <button
                       key={s.id}
-                      type="button"
                       onClick={() => setStyle(s.id)}
-                      className="rounded-xl p-3 text-left transition-all"
                       style={{
-                        background: style === s.id ? "rgba(99,102,241,0.15)" : "var(--background)",
-                        border: style === s.id ? "2px solid #6366f1" : "2px solid var(--border)",
+                        background: style === s.id ? "rgba(202,255,51,0.08)" : C.bg,
+                        border: style === s.id ? `1.5px solid ${C.accent}` : `1.5px solid ${C.border}`,
+                        borderRadius: 12,
+                        padding: "14px 12px",
+                        cursor: "pointer",
+                        textAlign: "left",
+                        transition: "all 150ms",
                       }}
                     >
-                      <div className={`h-8 rounded-lg mb-2 ${s.preview} ${s.id === "minimal" ? "border-zinc-200" : s.id === "bold" ? "border-zinc-700" : "border-indigo-700"}`} />
-                      <p className="text-xs font-semibold">{s.name}</p>
-                      <p className="text-xs" style={{ color: "var(--muted)" }}>{s.desc}</p>
+                      <div style={{
+                        width: 20, height: 20, borderRadius: "50%",
+                        background: s.dot, border: `1px solid ${s.dotBorder}`,
+                        marginBottom: 10,
+                      }} />
+                      <div style={{ fontSize: 13, fontWeight: 600, color: style === s.id ? C.accent : C.text }}>{s.label}</div>
+                      <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>{s.sub}</div>
                     </button>
                   ))}
                 </div>
               </div>
 
+              {/* Error */}
               {error && (
-                <p className="text-sm text-red-400 bg-red-400/10 rounded-lg px-4 py-2">{error}</p>
+                <div style={{ background: "rgba(255,80,80,0.08)", border: "1px solid rgba(255,80,80,0.2)", borderRadius: 10, padding: "12px 16px", marginBottom: 20, fontSize: 13, color: "#ff6060" }}>
+                  {error}
+                </div>
               )}
 
               {/* CTA */}
               <button
                 onClick={handleGenerate}
-                disabled={loading || !businessName.trim() || !description.trim()}
-                className="w-full h-12 rounded-xl font-semibold text-sm text-white transition-all disabled:opacity-40"
-                style={{ background: loading || !businessName.trim() || !description.trim() ? "#4f46e5" : "var(--primary)" }}
+                disabled={isLoading || !businessName.trim() || !description.trim()}
+                style={{
+                  width: "100%",
+                  height: 56,
+                  borderRadius: 14,
+                  border: "none",
+                  background: (isLoading || !businessName.trim() || !description.trim()) ? "rgba(202,255,51,0.25)" : C.accent,
+                  color: C.accentDark,
+                  fontSize: 15,
+                  fontWeight: 700,
+                  cursor: (isLoading || !businessName.trim() || !description.trim()) ? "not-allowed" : "pointer",
+                  letterSpacing: "-0.01em",
+                  transition: "all 150ms",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 8,
+                }}
               >
-                {loading ? (
-                  <span className="flex items-center justify-center gap-2">
-                    <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                {isLoading ? (
+                  <>
+                    <svg style={{ animation: "spin 1s linear infinite", width: 16, height: 16 }} viewBox="0 0 24 24" fill="none">
+                      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" strokeOpacity="0.25" />
+                      <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
                     </svg>
-                    Building your website...
-                  </span>
+                    Connecting...
+                  </>
                 ) : freeUsed ? (
-                  "Build website — $2"
+                  "Build website — $2 →"
                 ) : (
-                  "Build my website — Free ✨"
+                  "Build my website — Free →"
                 )}
               </button>
 
               {!freeUsed && (
-                <p className="text-center text-xs" style={{ color: "var(--muted)" }}>
-                  First website is free. No credit card needed.
+                <p style={{ textAlign: "center", marginTop: 14, fontSize: 12, color: C.muted }}>
+                  First website free. No credit card.
                 </p>
               )}
             </div>
-          </>
+          </div>
+
         ) : (
-          /* Result */
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-xl font-bold">Your website is ready 🎉</h2>
-                <p className="text-sm" style={{ color: "var(--muted)" }}>
-                  Preview below — download HTML and host it anywhere
-                </p>
+          /* ─── PREVIEW STATE ─── */
+          <div style={{ paddingTop: 40 }}>
+
+            {/* Status bar */}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                {isStreaming ? (
+                  <>
+                    {/* Pulsing dot */}
+                    <span style={{ position: "relative", display: "flex", width: 10, height: 10 }}>
+                      <span style={{
+                        position: "absolute", display: "inline-flex", borderRadius: "50%",
+                        width: "100%", height: "100%", background: C.accent, opacity: 0.7,
+                        animation: "ping 1.2s cubic-bezier(0,0,0.2,1) infinite"
+                      }} />
+                      <span style={{ position: "relative", display: "inline-flex", borderRadius: "50%", width: 10, height: 10, background: C.accent }} />
+                    </span>
+                    <div>
+                      <div style={{ fontWeight: 700, fontSize: 18, letterSpacing: "-0.03em" }}>Building your website...</div>
+                      <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>
+                        {charCount > 0 ? `${(charCount / 1000).toFixed(1)}k characters written` : "AI is starting..."}
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: 20, letterSpacing: "-0.03em" }}>
+                      Your website is ready{" "}
+                      <span style={{ color: C.accent }}>✓</span>
+                    </div>
+                    <div style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>
+                      Download the HTML — host it anywhere
+                    </div>
+                  </div>
+                )}
               </div>
-              <div className="flex gap-3">
+
+              <div style={{ display: "flex", gap: 10 }}>
                 <button
-                  onClick={() => { setHtml(""); setError(""); }}
-                  className="px-4 py-2 rounded-xl text-sm font-medium transition"
-                  style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
+                  onClick={resetAll}
+                  style={{ padding: "10px 16px", borderRadius: 10, background: C.surface, border: `1px solid ${C.border}`, color: C.text, fontSize: 13, fontWeight: 500, cursor: "pointer" }}
                 >
-                  ← New website
+                  ← New site
                 </button>
-                <button
-                  onClick={downloadHtml}
-                  className="px-5 py-2 rounded-xl text-sm font-semibold text-white transition"
-                  style={{ background: "var(--primary)" }}
-                >
-                  Download HTML
-                </button>
+                {isDone && (
+                  <button
+                    onClick={downloadHtml}
+                    style={{ padding: "10px 20px", borderRadius: 10, background: C.accent, border: "none", color: C.accentDark, fontSize: 13, fontWeight: 700, cursor: "pointer", letterSpacing: "-0.01em" }}
+                  >
+                    Download HTML
+                  </button>
+                )}
               </div>
             </div>
 
-            {/* Preview */}
-            <div className="rounded-2xl overflow-hidden" style={{ border: "1px solid var(--border)" }}>
-              {/* Browser chrome */}
-              <div className="flex items-center gap-2 px-4 py-3" style={{ background: "var(--surface)", borderBottom: "1px solid var(--border)" }}>
-                <div className="flex gap-1.5">
-                  <div className="h-3 w-3 rounded-full bg-red-500/60" />
-                  <div className="h-3 w-3 rounded-full bg-yellow-500/60" />
-                  <div className="h-3 w-3 rounded-full bg-green-500/60" />
+            {/* Browser chrome + iframe */}
+            <div style={{ borderRadius: 16, overflow: "hidden", border: `1px solid ${C.border}` }}>
+              {/* Chrome bar */}
+              <div style={{ background: C.surface, borderBottom: `1px solid ${C.border}`, padding: "12px 16px", display: "flex", alignItems: "center", gap: 10 }}>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <div style={{ width: 12, height: 12, borderRadius: "50%", background: "rgba(255,100,100,0.5)" }} />
+                  <div style={{ width: 12, height: 12, borderRadius: "50%", background: "rgba(255,200,50,0.5)" }} />
+                  <div style={{ width: 12, height: 12, borderRadius: "50%", background: "rgba(80,200,80,0.5)" }} />
                 </div>
-                <div
-                  className="flex-1 rounded-md px-3 py-1 text-xs mx-4"
-                  style={{ background: "var(--background)", color: "var(--muted)" }}
-                >
+                <div style={{
+                  flex: 1, background: C.bg, borderRadius: 8,
+                  padding: "6px 14px", marginLeft: 8,
+                  fontSize: 12, color: C.muted,
+                  display: "flex", alignItems: "center", gap: 8,
+                }}>
+                  {isStreaming && (
+                    <svg style={{ animation: "spin 1s linear infinite", width: 11, height: 11, flexShrink: 0 }} viewBox="0 0 24 24" fill="none">
+                      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" strokeOpacity="0.25" />
+                      <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+                    </svg>
+                  )}
                   {businessName.toLowerCase().replace(/\s+/g, "")}.com
                 </div>
               </div>
+
+              {/* Live iframe */}
               <iframe
-                ref={iframeRef}
-                srcDoc={html}
-                className="w-full"
-                style={{ height: "600px", background: "white" }}
-                sandbox="allow-same-origin"
+                srcDoc={html || "<html><body style='background:#fff;margin:0'></body></html>"}
+                style={{ width: "100%", height: 620, display: "block", background: "#fff", border: "none" }}
+                sandbox="allow-same-origin allow-scripts"
                 title="Website preview"
               />
             </div>
 
-            <p className="text-center text-xs" style={{ color: "var(--muted)" }}>
-              Want to make changes? Start a new generation below ↓
-            </p>
+            {isDone && (
+              <p style={{ textAlign: "center", marginTop: 20, fontSize: 12, color: C.muted }}>
+                Not happy? ← Start a new generation above.
+              </p>
+            )}
           </div>
         )}
       </div>
-    </main>
+
+      {/* Keyframe styles */}
+      <style>{`
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        @keyframes ping { 75%, 100% { transform: scale(2); opacity: 0; } }
+        * { box-sizing: border-box; }
+        body { margin: 0; }
+        input::placeholder, textarea::placeholder { color: rgba(255,255,255,0.2); }
+      `}</style>
+    </div>
   );
 }
