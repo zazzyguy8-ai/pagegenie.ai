@@ -146,6 +146,12 @@ export default function Home() {
     await generateSite(businessName, description, style);
   }
 
+  function openPreview() {
+    const blob = new Blob([html], { type: "text/html" });
+    const url = URL.createObjectURL(blob);
+    window.open(url, "_blank");
+  }
+
   function downloadHtml() {
     const blob = new Blob([html], { type: "text/html" });
     const url = URL.createObjectURL(blob);
@@ -397,12 +403,20 @@ export default function Home() {
                   ← New site
                 </button>
                 {isDone && (
-                  <button
-                    onClick={downloadHtml}
-                    style={{ padding: "10px 20px", borderRadius: 10, background: C.accent, border: "none", color: C.accentDark, fontSize: 13, fontWeight: 700, cursor: "pointer", letterSpacing: "-0.01em" }}
-                  >
-                    Download HTML
-                  </button>
+                  <>
+                    <button
+                      onClick={openPreview}
+                      style={{ padding: "10px 18px", borderRadius: 10, background: "rgba(202,255,51,0.1)", border: `1px solid ${C.accent}`, color: C.accent, fontSize: 13, fontWeight: 600, cursor: "pointer", letterSpacing: "-0.01em" }}
+                    >
+                      ↗ Open preview
+                    </button>
+                    <button
+                      onClick={downloadHtml}
+                      style={{ padding: "10px 20px", borderRadius: 10, background: C.accent, border: "none", color: C.accentDark, fontSize: 13, fontWeight: 700, cursor: "pointer", letterSpacing: "-0.01em" }}
+                    >
+                      Download HTML
+                    </button>
+                  </>
                 )}
               </div>
             </div>
