@@ -1,23 +1,14 @@
 import Anthropic from "@anthropic-ai/sdk";
-import Stripe from "stripe";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 export async function POST(req: Request) {
   try {
-    const body = await req.json() as { businessName: string; description: string; sessionId?: string };
-    const { businessName, description, sessionId } = body;
+    const body = await req.json() as { businessName: string; description: string };
+    const { businessName, description } = body;
 
     if (!businessName || !description) {
       return new Response(JSON.stringify({ error: "Missing fields" }), { status: 400 });
-    }
-
-    if (sessionId) {
-      const stripe  = new Stripe(process.env.STRIPE_SECRET_KEY!);
-      const session = await stripe.checkout.sessions.retrieve(sessionId);
-      if (session.payment_status !== "paid") {
-        return new Response(JSON.stringify({ error: "Payment not completed" }), { status: 402 });
-      }
     }
 
     const prompt = `You are an elite web designer. Create a stunning, complete, professional single-page website as ONE self-contained HTML file.

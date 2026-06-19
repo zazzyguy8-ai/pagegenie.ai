@@ -2,8 +2,6 @@
 
 import { useState, useEffect, useRef } from "react";
 
-const FREE_KEY = "pagegenie_free_used";
-
 const C = {
   bg:     "#FAFAF8",
   white:  "#FFFFFF",
@@ -18,32 +16,53 @@ export default function Home() {
   const [description,  setDescription]  = useState("");
   const [isLoading,    setIsLoading]    = useState(false);
   const [isStreaming,  setIsStreaming]   = useState(false);
+  const [isPaying,     setIsPaying]     = useState(false);
   const [html,         setHtml]         = useState("");
   const [previewUrl,   setPreviewUrl]   = useState<string | null>(null);
-  const [freeUsed,     setFreeUsed]     = useState(false);
   const [error,        setError]        = useState("");
   const htmlRef    = useRef("");
   const prevUrlRef = useRef<string | null>(null);
   const [displayedCode, setDisplayedCode] = useState("");
 
+  // On mount: check for Stripe return
   useEffect(() => {
-    setFreeUsed(localStorage.getItem(FREE_KEY) === "true");
     const params    = new URLSearchParams(window.location.search);
     const sessionId = params.get("session_id");
     if (sessionId) {
-      const saved = sessionStorage.getItem("pagegenie_pending");
-      if (saved) {
-        const d = JSON.parse(saved) as { businessName: string; description: string };
-        setBusinessName(d.businessName);
-        setDescription(d.description);
-        sessionStorage.removeItem("pagegenie_pending");
-        generateSite(d.businessName, d.description, sessionId);
-      }
       window.history.replaceState({}, "", "/");
+      handlePostPayment(sessionId);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  async function handlePostPayment(sessionId: string) {
+    // Verify payment server-side
+    const res = await fetch(`/api/verify?sessionId=${encodeURIComponent(sessionId)}`);
+    const data = await res.json() as { paid?: boolean };
+    if (!data.paid) { setError("Payment not confirmed. Contact support."); return; }
+
+    // Restore HTML from sessionStorage and auto-download
+    const savedHtml = sessionStorage.getItem("pagegenie_html");
+    const savedName = sessionStorage.getItem("pagegenie_name") || "website";
+    sessionStorage.removeItem("pagegenie_html");
+    sessionStorage.removeItem("pagegenie_name");
+
+    if (savedHtml) {
+      setHtml(savedHtml);
+      setBusinessName(savedName);
+      // Create preview URL
+      const blob = new Blob([savedHtml], { type: "text/html" });
+      const url  = URL.createObjectURL(blob);
+      prevUrlRef.current = url;
+      setPreviewUrl(url);
+      // Auto-download
+      triggerDownload(savedHtml, savedName);
+    } else {
+      setError("Preview expired — please generate again (still free).");
+    }
+  }
+
+  // Live code display during streaming
   useEffect(() => {
     if (!isStreaming) return;
     const iv = setInterval(() => {
@@ -53,6 +72,7 @@ export default function Home() {
     return () => clearInterval(iv);
   }, [isStreaming]);
 
+  // Create blob preview URL when done
   useEffect(() => {
     if (!isStreaming && html) {
       if (prevUrlRef.current) URL.revokeObjectURL(prevUrlRef.current);
@@ -65,7 +85,8 @@ export default function Home() {
 
   useEffect(() => () => { if (prevUrlRef.current) URL.revokeObjectURL(prevUrlRef.current); }, []);
 
-  async function generateSite(name: string, desc: string, sessionId?: string) {
+  async function generateSite() {
+    if (!businessName.trim() || !description.trim()) { setError("Fill in both fields."); return; }
     setIsLoading(true); setIsStreaming(false);
     setError(""); setHtml(""); setPreviewUrl(null); setDisplayedCode("");
     htmlRef.current = "";
@@ -74,14 +95,10 @@ export default function Home() {
       const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ businessName: name, description: desc, sessionId }),
+        body: JSON.stringify({ businessName, description }),
       });
 
-      if (!res.ok) {
-        const d = await res.json() as { error?: string };
-        setError(d.error ?? "Generation failed.");
-        return;
-      }
+      if (!res.ok) { const d = await res.json() as { error?: string }; setError(d.error ?? "Generation failed."); return; }
       if (!res.body) { setError("No response."); return; }
 
       setIsStreaming(true);
@@ -94,9 +111,7 @@ export default function Home() {
         if (done) break;
         htmlRef.current += decoder.decode(value, { stream: true });
       }
-
       setHtml(htmlRef.current);
-      if (!sessionId) { localStorage.setItem(FREE_KEY, "true"); setFreeUsed(true); }
     } catch {
       setError("Something went wrong. Try again.");
     } finally {
@@ -105,33 +120,32 @@ export default function Home() {
     }
   }
 
-  async function handleGenerate() {
-    if (!businessName.trim() || !description.trim()) {
-      setError("Fill in both fields.");
-      return;
+  async function handleDownload() {
+    // Save HTML + name before Stripe redirect
+    sessionStorage.setItem("pagegenie_html", html);
+    sessionStorage.setItem("pagegenie_name", businessName);
+
+    setIsPaying(true);
+    const res  = await fetch("/api/checkout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ businessName, description }),
+    });
+    const data = await res.json() as { url?: string; error?: string };
+    if (data.url) {
+      window.location.href = data.url;
+    } else {
+      setError("Payment failed to load. Try again.");
+      setIsPaying(false);
     }
-    if (freeUsed) {
-      setIsLoading(true);
-      sessionStorage.setItem("pagegenie_pending", JSON.stringify({ businessName, description }));
-      const res  = await fetch("/api/checkout", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ businessName, description }),
-      });
-      const data = await res.json() as { url?: string; error?: string };
-      if (data.url) window.location.href = data.url;
-      else { setError("Payment failed."); setIsLoading(false); }
-      return;
-    }
-    await generateSite(businessName, description);
   }
 
-  function downloadHtml() {
-    const blob = new Blob([html], { type: "text/html" });
+  function triggerDownload(h: string, name: string) {
+    const blob = new Blob([h], { type: "text/html" });
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement("a");
     a.href = url;
-    a.download = `${businessName.toLowerCase().replace(/\s+/g, "-")}-website.html`;
+    a.download = `${name.toLowerCase().replace(/\s+/g, "-")}-website.html`;
     a.click();
     URL.revokeObjectURL(url);
   }
@@ -172,64 +186,45 @@ export default function Home() {
                 <span style={{ color: C.accent }}>Get a website.</span>
               </h1>
               <p style={{ marginTop: 16, fontSize: 16, lineHeight: 1.65, color: C.muted, maxWidth: 360, margin: "16px auto 0" }}>
-                Tell us about your business. We build the rest.
+                Preview is free. Download for $2.
               </p>
             </div>
 
             <div style={{ background: C.white, border: `1px solid ${C.border}`, borderRadius: 20, padding: 28, boxShadow: "0 1px 4px rgba(0,0,0,0.05),0 8px 28px rgba(0,0,0,0.04)" }}>
 
               <div style={{ marginBottom: 16 }}>
-                <label style={{ display: "block", fontSize: 11, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase" as const, color: C.muted, marginBottom: 7 }}>
-                  Business Name
-                </label>
-                <input
-                  type="text"
-                  placeholder="e.g. Leo's Barber Shop"
-                  value={businessName}
+                <label style={{ display: "block", fontSize: 11, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase" as const, color: C.muted, marginBottom: 7 }}>Business Name</label>
+                <input type="text" placeholder="e.g. Leo's Barber Shop" value={businessName}
                   onChange={e => setBusinessName(e.target.value)}
-                  onKeyDown={e => e.key === "Enter" && handleGenerate()}
+                  onKeyDown={e => e.key === "Enter" && generateSite()}
                   style={{ width: "100%", background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: "12px 14px", fontSize: 15, color: C.text, outline: "none", boxSizing: "border-box" as const }}
                   onFocus={e => e.target.style.borderColor = "rgba(0,0,0,0.2)"}
-                  onBlur={e => e.target.style.borderColor = C.border}
-                />
+                  onBlur={e => e.target.style.borderColor = C.border} />
               </div>
 
               <div style={{ marginBottom: 22 }}>
-                <label style={{ display: "block", fontSize: 11, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase" as const, color: C.muted, marginBottom: 7 }}>
-                  What do you do?
-                </label>
-                <textarea
-                  placeholder="We offer premium haircuts and beard grooming for men in Bratislava. Walk-ins welcome, online booking available."
-                  value={description}
-                  onChange={e => setDescription(e.target.value)}
-                  rows={4}
+                <label style={{ display: "block", fontSize: 11, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase" as const, color: C.muted, marginBottom: 7 }}>What do you do?</label>
+                <textarea placeholder="We offer premium haircuts and beard grooming for men in Bratislava. Walk-ins welcome, online booking available."
+                  value={description} onChange={e => setDescription(e.target.value)} rows={4}
                   style={{ width: "100%", background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: "12px 14px", fontSize: 15, color: C.text, outline: "none", resize: "none" as const, boxSizing: "border-box" as const, fontFamily: "inherit", lineHeight: 1.6 }}
                   onFocus={e => e.target.style.borderColor = "rgba(0,0,0,0.2)"}
-                  onBlur={e => e.target.style.borderColor = C.border}
-                />
+                  onBlur={e => e.target.style.borderColor = C.border} />
               </div>
 
               {error && (
-                <div style={{ background: "#fff5f5", border: "1px solid #fecaca", borderRadius: 8, padding: "10px 14px", marginBottom: 18, fontSize: 13, color: "#dc2626" }}>
-                  {error}
-                </div>
+                <div style={{ background: "#fff5f5", border: "1px solid #fecaca", borderRadius: 8, padding: "10px 14px", marginBottom: 18, fontSize: 13, color: "#dc2626" }}>{error}</div>
               )}
 
-              <button
-                onClick={handleGenerate}
-                disabled={isLoading || !businessName.trim() || !description.trim()}
-                style={{ width: "100%", height: 52, borderRadius: 12, border: "none", background: (isLoading || !businessName.trim() || !description.trim()) ? "rgba(255,61,0,0.3)" : C.accent, color: "#fff", fontSize: 15, fontWeight: 700, cursor: (isLoading || !businessName.trim() || !description.trim()) ? "not-allowed" : "pointer", letterSpacing: "-0.01em", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}
-              >
-                {isLoading ? (
-                  <><svg style={{ animation: "spin 0.8s linear infinite", width: 16, height: 16 }} viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" strokeOpacity="0.2"/><path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="3" strokeLinecap="round"/></svg>Connecting...</>
-                ) : freeUsed ? "Build website — $2 →" : "Build my website — Free →"}
+              <button onClick={generateSite} disabled={isLoading || !businessName.trim() || !description.trim()}
+                style={{ width: "100%", height: 52, borderRadius: 12, border: "none", background: (isLoading || !businessName.trim() || !description.trim()) ? "rgba(255,61,0,0.3)" : C.accent, color: "#fff", fontSize: 15, fontWeight: 700, cursor: (isLoading || !businessName.trim() || !description.trim()) ? "not-allowed" : "pointer", letterSpacing: "-0.01em", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+                {isLoading
+                  ? <><Spinner />Connecting...</>
+                  : "Preview my website — Free →"}
               </button>
 
-              {!freeUsed && (
-                <p style={{ textAlign: "center" as const, marginTop: 12, fontSize: 12, color: C.muted }}>
-                  First website free · No credit card
-                </p>
-              )}
+              <p style={{ textAlign: "center" as const, marginTop: 12, fontSize: 12, color: C.muted }}>
+                Free preview · $2 to download · No signup
+              </p>
             </div>
           </div>
 
@@ -240,37 +235,41 @@ export default function Home() {
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20, flexWrap: "wrap" as const, gap: 12 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                 {isStreaming ? (
-                  <><span style={{ position: "relative", display: "flex", width: 10, height: 10, flexShrink: 0 }}>
-                    <span style={{ position: "absolute", inset: 0, borderRadius: "50%", background: C.accent, opacity: 0.5, animation: "ping 1.2s ease-out infinite" }}/>
-                    <span style={{ position: "relative", width: 10, height: 10, borderRadius: "50%", background: C.accent, display: "block" }}/>
-                  </span>
-                  <div>
+                  <><PulsingDot /><div>
                     <div style={{ fontWeight: 700, fontSize: 17, letterSpacing: "-0.03em" }}>Building your website...</div>
                     <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>AI is writing your code live</div>
                   </div></>
                 ) : (
                   <div>
-                    <div style={{ fontWeight: 700, fontSize: 18, letterSpacing: "-0.03em" }}>Your website is ready <span style={{ color: C.accent }}>✓</span></div>
-                    <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{Math.round(html.length / 1000)}KB · Download and host anywhere</div>
+                    <div style={{ fontWeight: 700, fontSize: 18, letterSpacing: "-0.03em" }}>
+                      Your website is ready <span style={{ color: C.accent }}>✓</span>
+                    </div>
+                    <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>
+                      Like it? Download for $2.
+                    </div>
                   </div>
                 )}
               </div>
+
               <div style={{ display: "flex", gap: 8 }}>
                 <button onClick={resetAll} style={{ padding: "9px 14px", borderRadius: 9, background: C.white, border: `1px solid ${C.border}`, color: C.text, fontSize: 13, fontWeight: 500, cursor: "pointer" }}>
                   ← New site
                 </button>
-                {isDone && <>
-                  <button onClick={() => window.open(previewUrl!, "_blank")} style={{ padding: "9px 16px", borderRadius: 9, background: C.white, border: `1px solid rgba(0,0,0,0.14)`, color: C.text, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
-                    ↗ Open preview
+                {isDone && (
+                  <button onClick={handleDownload} disabled={isPaying}
+                    style={{ padding: "9px 22px", borderRadius: 9, background: C.accent, border: "none", color: "#fff", fontSize: 13, fontWeight: 700, cursor: isPaying ? "not-allowed" : "pointer", opacity: isPaying ? 0.6 : 1, display: "flex", alignItems: "center", gap: 6 }}>
+                    {isPaying ? <><Spinner />Processing...</> : "Download — $2"}
                   </button>
-                  <button onClick={downloadHtml} style={{ padding: "9px 18px", borderRadius: 9, background: C.accent, border: "none", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
-                    Download HTML
-                  </button>
-                </>}
+                )}
               </div>
             </div>
 
+            {error && (
+              <div style={{ background: "#fff5f5", border: "1px solid #fecaca", borderRadius: 8, padding: "10px 14px", marginBottom: 16, fontSize: 13, color: "#dc2626" }}>{error}</div>
+            )}
+
             <div style={{ borderRadius: 16, overflow: "hidden", border: `1px solid ${C.border}`, boxShadow: "0 4px 24px rgba(0,0,0,0.06)" }}>
+              {/* Browser chrome */}
               <div style={{ background: C.white, borderBottom: `1px solid ${C.border}`, padding: "10px 16px", display: "flex", alignItems: "center", gap: 10 }}>
                 <div style={{ display: "flex", gap: 5 }}>
                   <div style={{ width: 11, height: 11, borderRadius: "50%", background: "#ff5f56" }}/>
@@ -278,11 +277,12 @@ export default function Home() {
                   <div style={{ width: 11, height: 11, borderRadius: "50%", background: "#27c93f" }}/>
                 </div>
                 <div style={{ flex: 1, background: C.bg, borderRadius: 7, padding: "5px 12px", marginLeft: 6, fontSize: 12, color: C.muted, display: "flex", alignItems: "center", gap: 6 }}>
-                  {isStreaming && <svg style={{ animation: "spin 0.8s linear infinite", width: 10, height: 10, flexShrink: 0 }} viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" strokeOpacity="0.2"/><path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="3" strokeLinecap="round"/></svg>}
+                  {isStreaming && <Spinner small />}
                   pagegenie.org/{businessName.toLowerCase().replace(/\s+/g, "-")}
                 </div>
               </div>
 
+              {/* Streaming: live code */}
               {isStreaming && (
                 <div style={{ background: "#0F0F0F", height: 560, overflow: "hidden", position: "relative" }}>
                   <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 80, background: "linear-gradient(to bottom,#0F0F0F,transparent)", zIndex: 2, pointerEvents: "none" as const }}/>
@@ -292,12 +292,19 @@ export default function Home() {
                 </div>
               )}
 
+              {/* Done: iframe preview */}
               {isDone && previewUrl && (
-                <iframe key={previewUrl} src={previewUrl} style={{ width: "100%", height: 600, display: "block", border: "none", background: "#fff" }} sandbox="allow-scripts allow-same-origin allow-forms" title="Website preview"/>
+                <iframe key={previewUrl} src={previewUrl}
+                  style={{ width: "100%", height: 600, display: "block", border: "none", background: "#fff" }}
+                  sandbox="allow-scripts allow-same-origin allow-forms" title="Website preview"/>
               )}
             </div>
 
-            {isDone && <p style={{ textAlign: "center" as const, marginTop: 16, fontSize: 12, color: C.muted }}>Not happy? ← Start a new generation above.</p>}
+            {isDone && (
+              <p style={{ textAlign: "center" as const, marginTop: 16, fontSize: 12, color: C.muted }}>
+                Not happy? ← Generate a new one for free.
+              </p>
+            )}
           </div>
         )}
       </div>
@@ -311,5 +318,24 @@ export default function Home() {
         input::placeholder, textarea::placeholder { color:rgba(0,0,0,0.28); }
       `}</style>
     </div>
+  );
+}
+
+function Spinner({ small }: { small?: boolean }) {
+  const s = small ? 10 : 16;
+  return (
+    <svg style={{ animation: "spin 0.8s linear infinite", width: s, height: s, flexShrink: 0 }} viewBox="0 0 24 24" fill="none">
+      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" strokeOpacity="0.2"/>
+      <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="3" strokeLinecap="round"/>
+    </svg>
+  );
+}
+
+function PulsingDot() {
+  return (
+    <span style={{ position: "relative", display: "flex", width: 10, height: 10, flexShrink: 0 }}>
+      <span style={{ position: "absolute", inset: 0, borderRadius: "50%", background: "#FF3D00", opacity: 0.5, animation: "ping 1.2s ease-out infinite" }}/>
+      <span style={{ position: "relative", width: 10, height: 10, borderRadius: "50%", background: "#FF3D00", display: "block" }}/>
+    </span>
   );
 }
