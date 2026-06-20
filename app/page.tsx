@@ -136,7 +136,12 @@ export default function Home() {
         if (done) break;
         htmlRef.current += decoder.decode(value, { stream: true });
       }
-      setHtml(htmlRef.current);
+      let finalHtml = htmlRef.current.trim();
+      // Strip markdown fences if Claude wrapped the output
+      if (finalHtml.startsWith("```")) {
+        finalHtml = finalHtml.replace(/^```[a-z]*\n?/, "").replace(/\n?```\s*$/, "").trim();
+      }
+      setHtml(finalHtml);
     } catch {
       setError("Something went wrong. Try again.");
     } finally {
