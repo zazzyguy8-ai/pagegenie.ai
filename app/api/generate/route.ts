@@ -11,31 +11,48 @@ export async function POST(req: Request) {
       return new Response(JSON.stringify({ error: "Missing fields" }), { status: 400 });
     }
 
-    const prompt = `You are an elite web designer. Create a stunning, complete, professional single-page website as ONE self-contained HTML file.
+    const prompt = `You are a world-class web designer. Create a complete, visually stunning single-page website as ONE self-contained HTML file.
 
 BUSINESS NAME: ${businessName}
 BUSINESS DESCRIPTION: ${description}
 
-Your job: read the business, understand its industry and audience, then design and build the perfect website for it. Choose everything yourself — colors, fonts, layout, style, copy. Make it feel like it was designed by a world-class agency specifically for this business.
+Study this business carefully. Understand its industry, target audience, and emotional positioning. Then design something that feels custom-built by a top agency — not a template.
 
-SECTIONS:
-1. Sticky nav: logo/name + navigation links + CTA button
-2. Hero: powerful headline + subheadline + 2 CTA buttons
-3. Services or Features: 3 cards in a responsive grid
-4. About / Trust: short paragraph + 3 stats or trust signals
-5. Contact / CTA: headline + email input + button
-6. Footer: logo, links, copyright
+━━━ VISUAL DESIGN ━━━
+- Choose a distinctive color palette that matches the industry psychology (NOT generic blue/purple)
+- Pick a Google Font that fits the brand personality
+- Use REAL Unsplash photos — embed them directly with this URL format:
+  https://images.unsplash.com/photo-PHOTO_ID?auto=format&fit=crop&w=1200&q=80
+- Choose 3-4 actual Unsplash photo IDs from your training data that are visually relevant to this business type
+- Hero section: full-width background image with a semi-transparent overlay (rgba dark or brand color at 0.6 opacity) so text is always readable over it
+- Cards and about section: use a second Unsplash image as a decorative element
 
-RULES:
-- Output ONLY raw HTML starting with <!DOCTYPE html>. No explanation, no markdown.
-- All CSS inside a <style> tag in <head>. All JS inside a <script> tag before </body>.
-- Load ONE Google Font that fits the brand via <link> in <head>.
-- Fully responsive with mobile media queries.
-- Write REAL copy based on the business. Zero placeholder text. Zero Lorem Ipsum.
-- Strong color contrast everywhere. Text must always be readable.
-- Smooth hover effects on buttons and cards.
-- Scroll-triggered fade-in animations using Intersection Observer.
-- The result must look like a real €5,000 agency website.`;
+━━━ SECTIONS (each needs an id attribute) ━━━
+1. <nav id="nav"> — sticky header, logo/brand name on left, nav links (href="#services", href="#about", href="#contact") in middle, CTA button on right
+2. <section id="hero"> — min-height: 100vh, background image with overlay, big headline, subheadline, 2 buttons
+3. <section id="services"> — "Our Services" or "What We Offer", 3 cards in CSS grid, each with an icon (use Unicode emoji or simple SVG), title, description
+4. <section id="about"> — about paragraph + 3 stats (numbers + labels) side by side
+5. <section id="contact"> — headline, name input, email input, message textarea, submit button
+6. <footer> — brand name, copyright, 3 nav links
+
+━━━ INTERACTIONS (must all work) ━━━
+- html { scroll-behavior: smooth; } — so nav links actually scroll
+- All nav links use href="#section-id" and scroll to the correct section
+- Mobile hamburger menu: a ☰ button that toggles a dropdown nav on screens < 768px
+- Buttons: transform: translateY(-2px) and box-shadow on hover
+- Cards: subtle lift on hover (translateY + shadow)
+- Fade-in on scroll: use IntersectionObserver to add a "visible" class, CSS handles opacity 0→1 + translateY(20px)→0
+
+━━━ HARD RULES ━━━
+- Output ONLY raw HTML starting with <!DOCTYPE html>. Zero explanation, zero markdown fences.
+- ALL CSS in one <style> tag inside <head>
+- ALL JavaScript in one <script> tag just before </body>
+- Google Font <link> tag inside <head>
+- Real copy only — write actual headlines, descriptions, services based on this specific business
+- Every section must have a visible, non-black background color with readable text
+- NEVER leave any section with just a black or empty background
+- Mobile responsive with @media (max-width: 768px) queries
+- The page must look like it cost €8,000 to build`;
 
     const stream = anthropic.messages.stream({
       model: "claude-sonnet-4-6",
