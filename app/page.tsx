@@ -11,6 +11,19 @@ const C = {
   accent: "#FF3D00",
 };
 
+const LOADING_MSGS = [
+  "Reading your business...",
+  "Picking the perfect colors...",
+  "Choosing fonts that fit...",
+  "Writing your headline...",
+  "Designing the layout...",
+  "Sourcing images...",
+  "Building your hero section...",
+  "Writing your copy...",
+  "Crafting the services section...",
+  "Adding finishing touches...",
+];
+
 export default function Home() {
   const [businessName, setBusinessName] = useState("");
   const [description,  setDescription]  = useState("");
@@ -23,6 +36,7 @@ export default function Home() {
   const htmlRef    = useRef("");
   const prevUrlRef = useRef<string | null>(null);
   const [displayedCode, setDisplayedCode] = useState("");
+  const [loadingMsg,    setLoadingMsg]    = useState(LOADING_MSGS[0]);
 
   // On mount: check for Stripe return
   useEffect(() => {
@@ -61,6 +75,17 @@ export default function Home() {
       setError("Preview expired — please generate again (still free).");
     }
   }
+
+  // Cycle loading messages while waiting for stream to start
+  useEffect(() => {
+    if (!isLoading) return;
+    let i = 0;
+    const iv = setInterval(() => {
+      i = (i + 1) % LOADING_MSGS.length;
+      setLoadingMsg(LOADING_MSGS[i]);
+    }, 1800);
+    return () => clearInterval(iv);
+  }, [isLoading]);
 
   // Live code display during streaming
   useEffect(() => {
@@ -218,7 +243,7 @@ export default function Home() {
               <button onClick={generateSite} disabled={isLoading || !businessName.trim() || !description.trim()}
                 style={{ width: "100%", height: 52, borderRadius: 12, border: "none", background: (isLoading || !businessName.trim() || !description.trim()) ? "rgba(255,61,0,0.3)" : C.accent, color: "#fff", fontSize: 15, fontWeight: 700, cursor: (isLoading || !businessName.trim() || !description.trim()) ? "not-allowed" : "pointer", letterSpacing: "-0.01em", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
                 {isLoading
-                  ? <><Spinner />Connecting...</>
+                  ? <><Spinner />{loadingMsg}</>
                   : "Preview my website — Free →"}
               </button>
 
